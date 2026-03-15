@@ -15,7 +15,9 @@
 
 - list: openclaw_exfil_tools
   items: [
-    "curl", "wget", "nc ", "ncat", "scp ", "rsync"
+    "curl", "wget", "nc ", "ncat", "scp ", "rsync",
+    "sftp", "aws s3", "gsutil cp", "rclone",
+    "requests.post", "requests.put", "httpx", "base64"
   ]
 
 - list: openclaw_sensitive_data
@@ -23,20 +25,21 @@
     "/etc/passwd", "/etc/shadow", ".ssh/id_",
     ".env", "credentials", "secret", "token",
     ".aws/credentials", ".kube/config",
-    "openclaw.json"
+    "openclaw.json", "device.json", "MEMORY.md",
+    "privateKey", "api_key", "API_KEY"
   ]
 
 - list: openclaw_escape_paths
   items: [
     "/etc/passwd", "/etc/shadow", "/etc/sudoers",
-    "/root/", "/proc/", "/sys/", "/dev/",
-    "/boot/", "/sbin/"
+    "/root/", "/proc/", "/sys/kernel", "/dev/sd",
+    "/boot/", "/sbin/",
+    "~/.ssh", "~/.aws", "/.openclaw/"
   ]
 
 - list: openclaw_shell_metacharacters
   items: [
-    "$(", "`", "; ", "&&", "||",
-    "| ", "> ", ">> "
+    "$(", "`"
   ]
 
 - list: openclaw_suspicious_configs
@@ -82,12 +85,20 @@
   tags: [security, dangerous_command, openclaw]
 
 - rule: "[OPENCLAW DataExfil] Data Exfiltration Attempt"
-  desc: Detects attempts to exfiltrate sensitive data via network tools
+  desc: Detects attempts to exfiltrate sensitive data via network, cloud, or encode tools
   condition: >
     (openclaw.args icontains "curl"
     or openclaw.args icontains "wget"
     or openclaw.args icontains "nc "
-    or openclaw.args icontains "scp ")
+    or openclaw.args icontains "scp "
+    or openclaw.args icontains "sftp"
+    or openclaw.args icontains "aws s3"
+    or openclaw.args icontains "gsutil cp"
+    or openclaw.args icontains "rclone"
+    or openclaw.args icontains "requests.post"
+    or openclaw.args icontains "requests.put"
+    or openclaw.args icontains "httpx"
+    or openclaw.args icontains "base64")
     and (openclaw.args icontains "/etc/passwd"
     or openclaw.args icontains ".ssh/id_"
     or openclaw.args icontains ".env"
@@ -95,7 +106,12 @@
     or openclaw.args icontains "secret"
     or openclaw.args icontains "token"
     or openclaw.args icontains ".aws/credentials"
-    or openclaw.args icontains "openclaw.json")
+    or openclaw.args icontains "openclaw.json"
+    or openclaw.args icontains "device.json"
+    or openclaw.args icontains "MEMORY.md"
+    or openclaw.args icontains "privateKey"
+    or openclaw.args icontains "api_key"
+    or openclaw.args icontains "API_KEY")
   output: >
     [OPENCLAW DataExfil] Data exfiltration attempt detected
     (tool=%openclaw.tool
@@ -127,17 +143,25 @@
   tags: [security, agent_runaway, openclaw]
 
 - rule: "[OPENCLAW Escape] Workspace Escape Attempt"
-  desc: Detects attempts to access files outside the designated workspace
+  desc: Detects attempts to access files outside the designated workspace via file/exec tools
   condition: >
-    openclaw.args icontains "/etc/passwd"
+    (openclaw.tool icontains "read"
+    or openclaw.tool icontains "write"
+    or openclaw.tool icontains "bash"
+    or openclaw.tool icontains "exec")
+    and (openclaw.args icontains "/etc/passwd"
     or openclaw.args icontains "/etc/shadow"
     or openclaw.args icontains "/etc/sudoers"
     or openclaw.args icontains "/root/"
     or openclaw.args icontains "/proc/"
-    or openclaw.args icontains "/sys/"
-    or openclaw.args icontains "/dev/"
+    or openclaw.args icontains "/sys/kernel"
+    or openclaw.args icontains "/dev/sd"
     or openclaw.args icontains "/boot/"
-    or openclaw.args icontains "../../"
+    or openclaw.args icontains "~/.ssh"
+    or openclaw.args icontains "~/.aws"
+    or openclaw.args icontains "/.openclaw/"
+    or (openclaw.args icontains "../../"
+        and not openclaw.args icontains "node_modules"))
   output: >
     [OPENCLAW Escape] Workspace escape attempt detected
     (tool=%openclaw.tool
@@ -171,10 +195,17 @@
   tags: [security, suspicious_config, openclaw]
 
 - rule: "[OPENCLAW Model] Unauthorized Model Change"
-  desc: Detects unauthorized AI model changes in configuration
+  desc: Detects agent-initiated model changes (not user-initiated config edits)
   condition: >
     openclaw.type = "config_change"
     and openclaw.model != ""
+    and not openclaw.source_file icontains "user_config"
+    and not openclaw.source_file icontains "settings"
+    and (openclaw.model icontains "gpt-"
+    or openclaw.model icontains "claude-"
+    or openclaw.model icontains "gemini"
+    or openclaw.model icontains "deepseek"
+    or openclaw.model icontains "ollama")
   output: >
     [OPENCLAW Model] Unauthorized model change detected
     (model=%openclaw.model
@@ -186,18 +217,24 @@
   tags: [security, unauthorized_model, openclaw]
 
 - rule: "[OPENCLAW ShellInj] Shell Injection Attempt"
-  desc: Detects shell injection in non-shell tool arguments
+  desc: Detects shell injection in non-shell tool arguments (high-signal metacharacters only)
   condition: >
     openclaw.tool != "bash"
     and openclaw.tool != "shell"
     and openclaw.tool != "exec"
+    and openclaw.tool != "run"
     and openclaw.tool != ""
     and (openclaw.args icontains "$("
     or openclaw.args icontains "`"
-    or openclaw.args icontains "; "
-    or openclaw.args icontains "&&"
-    or openclaw.args icontains "||"
-    or openclaw.args icontains "| ")
+    or (openclaw.args icontains "; "
+        and (openclaw.args icontains "rm"
+             or openclaw.args icontains "curl"
+             or openclaw.args icontains "wget"
+             or openclaw.args icontains "python"))
+    or (openclaw.args icontains "&&"
+        and (openclaw.args icontains "curl"
+             or openclaw.args icontains "wget"
+             or openclaw.args icontains "nc ")))
   output: >
     [OPENCLAW ShellInj] Shell injection attempt detected
     (tool=%openclaw.tool
